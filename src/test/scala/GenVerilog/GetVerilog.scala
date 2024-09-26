@@ -10,7 +10,7 @@ import Fundamental_IC._
 object main extends App {
     (new ChiselStage).execute(
       Array("--target", "systemverilog", "--target-dir", "verification/dut"),
-      Seq(ChiselGeneratorAnnotation(() => new adder(32)),
+      Seq(ChiselGeneratorAnnotation(() => new parallel_adder(4,32)),
       FirtoolOption("--disable-all-randomization"),
       FirtoolOption("-strip-debug-info")
       )
