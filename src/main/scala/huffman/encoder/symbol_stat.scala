@@ -60,8 +60,9 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
 
     when(io.flush) {
         state := sIdle
-        sort_counter := 0.U
-        phase := false.B
-        output_ready := false.B
+        for(i <- 0 until depth) { 
+            freq(i) := 0.U
+        }
+        outIdx := 0.U
     }
 }

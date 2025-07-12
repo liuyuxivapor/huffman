@@ -3,10 +3,6 @@ package huffman.encoder
 import chisel3._
 import chisel3.util._
 
-/**
- * 熵感知霍夫曼树构建器
- * 集成基础树构建、深度调整和质量分析
- */
 class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
     val io = IO(new Bundle {
         // 输入频率数据
@@ -30,6 +26,8 @@ class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
         // 质量反馈
         val tree_efficiency = Output(UInt(16.W))
         val avg_code_length = Output(UInt(16.W))
+        val busy = Output(Bool())
+        val flush = Input(Bool())
     })
 
     // 内部模块实例化
@@ -44,9 +42,9 @@ class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
     // 过滤后的频率数据
     val filtered_freq = RegInit(VecInit(Seq.fill(depth)(0.U(wtWidth.W))))
 
-    val efficiency_threshold = (0.8 * (1 << 16)).toInt.U  // 80% 效率阈值
-    
-    // 连接逻辑
+    io.busy := (state =/= sIdle)
+    io.done := (state === sDone)
+
     switch(state) {
         is(sIdle) {
             when(io.start && io.entropy_config.config_valid) {
@@ -67,7 +65,6 @@ class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
         }
         
         is(sBuildTree) {
-            val sorted_freq = symbol_sort.io.sorted_out.bits
             basic_tree_builder.io.sorted_in.valid := true.B
             basic_tree_builder.io.sorted_in.bits := filtered_freq
             basic_tree_builder.io.start := true.B
@@ -89,28 +86,30 @@ class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
         }
         
         is(sAnalyzeQuality) {
-            // 质量分析
             quality_analyzer.io.freq_in := filtered_freq
+            quality_analyzer.io.code_length := tree_adjuster.io.hist_out
             quality_analyzer.io.valid := true.B
             
-            when(quality_analyzer.io.efficiency > efficiency_threshold) {
+            when(quality_analyzer.io.valid) {
                 state := sGenerateCodes
-            }.otherwise {
-                // 质量不达标，重新调整参数
-                state := sAdjustDepth
             }
         }
         
         is(sGenerateCodes) {
-            // 生成最终码表
+            // 生成霍夫曼码表
+            // 这里需要添加具体的码表生成逻辑
             state := sDone
         }
         
         is(sDone) {
-            io.done := true.B
             when(!io.start) {
                 state := sIdle
             }
         }
+    }
+
+    when(io.flush) {
+        state := sIdle
+        filtered_freq := VecInit(Seq.fill(depth)(0.U(wtWidth.W)))
     }
 }
