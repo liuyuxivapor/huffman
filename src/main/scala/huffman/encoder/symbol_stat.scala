@@ -1,4 +1,4 @@
-package huffman_encoder
+package huffman.encoder
 
 import chisel3._
 import chisel3.util._
@@ -10,6 +10,8 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
         val freq_out = Decoupled(Vec(depth, UInt(wtWidth.W)))
         val start    = Input(Bool())
         val done     = Output(Bool())
+        val busy     = Output(Bool())
+        val flush    = Input(Bool())
     })
 
     val freq = RegInit(VecInit(Seq.fill(depth)(0.U(wtWidth.W))))
@@ -21,6 +23,7 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
     io.freq_out.valid := false.B
     io.freq_out.bits := freq
     io.done := false.B
+    io.busy := (state =/= sIdle)
 
     switch(state) {
         is(sIdle) {
@@ -33,7 +36,7 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
         }
         is(sCount) {
             io.data_in.ready := true.B
-            when(io.data_in.fire()) {
+            when(io.data_in.fire) {
                 val sym = io.data_in.bits
                 freq(sym) := freq(sym) + 1.U
             }
@@ -45,7 +48,7 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
         is(sOutput) {
             io.freq_out.valid := true.B
             io.freq_out.bits := freq
-            when(io.freq_out.fire()) {
+            when(io.freq_out.fire) {
                 outIdx := outIdx + 1.U
                 when(outIdx === (depth-1).U) {
                     state := sIdle
@@ -53,5 +56,12 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
                 }
             }
         }
+    }
+
+    when(io.flush) {
+        state := sIdle
+        sort_counter := 0.U
+        phase := false.B
+        output_ready := false.B
     }
 }

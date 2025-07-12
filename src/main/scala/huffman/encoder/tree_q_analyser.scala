@@ -18,7 +18,7 @@ class TreeQualityAnalyzer(val depth: Int, val wtWidth: Int) extends Module {
         val compression_ratio = Output(UInt(16.W))
     })
 
-    val total_symbols = freq_in.reduce(_ + _)
+    val total_symbols = io.freq_in.reduce(_ + _)
     val weighted_length = Wire(UInt(32.W))
     val theoretical_entropy = Wire(UInt(16.W))
 

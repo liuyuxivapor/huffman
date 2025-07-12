@@ -1,4 +1,4 @@
-package huffman_encoder
+package huffman.encoder
 
 import chisel3._
 import chisel3.util._
@@ -15,11 +15,13 @@ class tree_build(val depth: Int, val idxWidth: Int, val wtWidth: Int) extends Mo
         val start     = Input(Bool())
         // Done signal indicating tree construction completion
         val done      = Output(Bool())
+        // Depth histogram output for tree adjustment
+        val depth_histogram = Output(Vec(32, UInt(log2Ceil(maxNodes).W)))
     })
 
     // Storage arrays for Huffman tree nodes
     // Weight values of each node, initialized to maximum value
-    val weight   = RegInit(VecInit(Seq.fill(maxNodes)(UIntMax(wtWidth.W))))
+    val weight   = RegInit(VecInit(Seq.fill(maxNodes)((1.U << wtWidth) - 1.U)))
     // Depth of each node in the tree
     val depthArr = RegInit(VecInit(Seq.fill(maxNodes)(0.U(log2Ceil(depth).W))))
     // Valid bit indicating if a node is active
@@ -36,39 +38,43 @@ class tree_build(val depth: Int, val idxWidth: Int, val wtWidth: Int) extends Mo
     val nodeCnt = RegInit(0.U(log2Ceil(maxNodes+1).W))
     // Counter for merge operations performed
     val mergeCount = RegInit(0.U(log2Ceil(depth).W))
+    // Depth histogram for tree adjustment
+    val depthHist = RegInit(VecInit(Seq.fill(32)(0.U(log2Ceil(maxNodes).W))))
 
     // Find indices of the two minimum values in the array with valid mask
     def findTwoMinIndices(vals: Seq[UInt], mask: Seq[Bool]): (UInt, UInt) = {
-        // Mask values with invalid entries set to maximum value
-        val masked = vals.zip(mask).map{ case (v, m) => Mux(m, v, UIntMax(wtWidth.W)) }
+        val maxVal = (1.U << wtWidth) - 1.U
+        val masked = vals.zip(mask).map{ case (v, m) => Mux(m, v, maxVal) }
         
-        // Find the first minimum value and its index
-        val min1Val = RegInit(UIntMax(wtWidth.W))
-        val min1Idx = RegInit(0.U(idxWidth.W))
-        for(i <- 0 until maxNodes) {
-            when(masked(i) < min1Val) {
-                min1Val := masked(i)
-                min1Idx := i.U
-            }
-        }
+        val min1Val = Wire(UInt(wtWidth.W))
+        val min1Idx = Wire(UInt(idxWidth.W))
+        val min2Val = Wire(UInt(wtWidth.W))
+        val min2Idx = Wire(UInt(idxWidth.W))
         
-        // Find the second minimum value and its index (excluding the first minimum)
-        val min2Val = RegInit(UIntMax(wtWidth.W))
-        val min2Idx = RegInit(0.U(idxWidth.W))
-        for(i <- 0 until maxNodes) {
-            when(masked(i) < min2Val && i.U =/= min1Idx) {
-                min2Val := masked(i)
-                min2Idx := i.U
-            }
+        // Find first minimum
+        min1Val := masked.reduce((a, b) => Mux(a < b, a, b))
+        min1Idx := masked.zipWithIndex.map{ case (v, i) => 
+            Mux(v === min1Val, i.U, 0.U) 
+        }.reduce(_ | _)
+        
+        // Find second minimum (excluding first)
+        val maskedExclude = masked.zipWithIndex.map{ case (v, i) => 
+            Mux(i.U === min1Idx, maxVal, v) 
         }
+        min2Val := maskedExclude.reduce((a, b) => Mux(a < b, a, b))
+        min2Idx := maskedExclude.zipWithIndex.map{ case (v, i) => 
+            Mux(v === min2Val, i.U, 0.U) 
+        }.reduce(_ | _)
         
         (min1Idx, min2Idx)
     }
+
 
     // Default output values
     io.done := false.B
     io.root_idx := 0.U
     io.sorted_in.ready := false.B
+    io.depth_histogram := depthHist
 
     switch(state) {
         is(sIdle) {
@@ -87,7 +93,7 @@ class tree_build(val depth: Int, val idxWidth: Int, val wtWidth: Int) extends Mo
         is(sLoad) {
             // Accept sorted input weights
             io.sorted_in.ready := true.B
-            when(io.sorted_in.fire()) {
+            when(io.sorted_in.fire) {
                 // Initialize leaf nodes with input weights
                 for(i <- 0 until depth) {
                     weight(i) := io.sorted_in.bits(i)
@@ -136,6 +142,18 @@ class tree_build(val depth: Int, val idxWidth: Int, val wtWidth: Int) extends Mo
         }
 
         is(sDone) {
+            // Calculate depth histogram
+            for(d <- 0 until 32) {
+                val count = Wire(UInt(log2Ceil(maxNodes).W))
+                count := (0 until depth).map(i => 
+                    Mux(valid(i) && depthArr(i) === d.U, 1.U, 0.U)
+                ).reduce(_ + _)
+                depthHist(d) := count
+            }
+            
+            // Output depth histogram
+            io.depth_histogram := depthHist
+            
             // Indicate completion and hold root index
             io.done := true.B
             io.root_idx := nodeCnt - 1.U

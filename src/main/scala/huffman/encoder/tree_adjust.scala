@@ -1,4 +1,4 @@
-package huffman_encoder
+package huffman.encoder
 
 import chisel3._
 import chisel3.util._
@@ -10,7 +10,7 @@ import chisel3.util._
   * Steps:
   * 1) Compute K = (N(L+1)+...+N(maxD))/2, where N(d) is node count at level d
   * 2) Migrate nodes from levels 1..L-1 down to level L until emptySlots(L) >= K
-  * 3) Move K nodes to level L; then apply Observation?3 to eliminate any remaining holes
+  * 3) Move K nodes to level L; then apply Observation 3 to eliminate any remaining holes
   */
 
 class tree_adjust(val numLeaves: Int, val maxDepth: Int) extends Module {
@@ -30,138 +30,149 @@ class tree_adjust(val numLeaves: Int, val maxDepth: Int) extends Module {
     val currentD  = RegInit(1.U(log2Ceil(maxDepth+1).W))
     val nodesMoved= RegInit(0.U(lvlWidth.W))
     val kMoved    = RegInit(0.U(lvlWidth.W))
-    val holes     = Reg(Vec(maxDepth*2+1, UInt(lvlWidth.W))) // Ã¿²ãµÄ¿Õ¶´Êı
+    val holes     = Reg(Vec(maxDepth*2+1, UInt(lvlWidth.W)))
 
-    // ¸¨Öúº¯Êı£º¼ÆËãÌØ¶¨Éî¶ÈµÄ¿Õ²ÛÊı
+    /** Calculate empty slots at specified depth */
     def emptySlotsAtDepth(d: UInt): UInt = {
         (1.U << d) - hist(d)
     }
 
-    // ¸¨Öúº¯Êı£º¼ÆËãÌØ¶¨Éî¶ÈµÄ¿Õ¶´Êı
+    /** Calculate number of holes at specified depth */
     def computeHoles(d: UInt): UInt = {
         val maxNodes = 1.U << d
         Mux(d === 0.U, 0.U, maxNodes - hist(d) - holes(d + 1.U))
     }
 
-    // Ö÷Âß¼­
+    // Main logic signals
     emptySlots := emptySlotsAtDepth(maxDepth.U)
     
-    // ²½Öè1£º¼ÆËãKÖµ
+    // Step 1: Compute K value
     val sumHigh = hist.zipWithIndex.map{ case (v,d) => 
         Mux(d.U > maxDepth.U, v, 0.U) 
     }.reduce(_+_)
     K := sumHigh >> 1.U
 
-    // ³õÊ¼»¯¿Õ¶´Êı
+    // Initialize holes array
     for(d <- 0 until maxDepth) {
         holes(d) := 0.U
     }
 
-    // Ä¬ÈÏÊä³ö
+    // Default outputs
     io.hist_out := hist
     io.done := (step === 4.U)
 
     switch(step) {
-        is(0.U) { // ²½Öè1£º¼ÓÔØÖ±·½Í¼²¢¼ÆËãK
+        is(0.U) { // Step 1: Load histogram and initialize for K calculation
             when(io.start) {
                 for(d <- 0 until hist.length) hist(d) := io.hist_in(d)
                 step := 1.U
             }
         }
         
-        is(1.U) { // ²½Öè2£º´ÓÉî¶È1µ½L-1Ç¨ÒÆ½Úµãµ½L
+        is(1.U) { // Step 2: Migrate nodes from levels 1 to L-1 down to level L
             when(emptySlots < K) {
                 when(currentD < maxDepth.U) {
-                    // ³¢ÊÔ´Óµ±Ç°Éî¶ÈÇ¨ÒÆ½Úµã
+                    // Attempt to migrate node from current depth
                     when(hist(currentD) > 0.U) {
-                        // Ç¨ÒÆÒ»¸ö½Úµã
+                        // Migrate one node
                         hist(currentD)         := hist(currentD) - 1.U
                         hist(maxDepth)         := hist(maxDepth) + 1.U
-                        // ¸üĞÂ¸¸½ÚµãÉî¶ÈµÄ¿Õ²ÛÊı
+                        // Update empty slots at parent depth
                         when(currentD > 0.U) {
                             hist(currentD - 1.U) := hist(currentD - 1.U) + 2.U
                         }
                     }
-                    // ÒÆ¶¯µ½ÏÂÒ»¸öÉî¶È
+                    // Move to next depth level
                     currentD := currentD + 1.U
                 }.otherwise {
-                    // Íê³ÉÒ»ÂÖÇ¨ÒÆ£¬ÖØÖÃcurrentD
+                    // Complete one migration pass, reset currentD
                     currentD := 1.U
                 }
             }.otherwise {
-                // ¿Õ²ÛÊı×ã¹»£¬½øÈë²½Öè3
+                // Sufficient empty slots available, proceed to Step 3
                 step := 2.U
                 currentD := (maxDepth-1).U
                 kMoved := 0.U
             }
         }
         
-        is(2.U) { // ²½Öè3.1£ºÒÆ¶¯K¸ö½Úµãµ½L²ã
+        is(2.U) { // Step 3.1: Move exactly K nodes to level L
             when(kMoved < K) {
-                // ÕÒµ½×îÉîµÄ·Ç¿Õ²ã¼¶£¨´ÓL-1¿ªÊ¼ÏòÏÂ£©
-                var found = false
-                for(d <- (maxDepth-1) to 0 by -1) {
-                    if(!found && d > 0) {
-                        when(currentD === d.U && hist(d) > 0.U) {
-                            // Ç¨ÒÆ½Úµã
-                            hist(d)            := hist(d) - 1.U
-                            hist(maxDepth)     := hist(maxDepth) + 1.U
-                            hist(d - 1)        := hist(d - 1) + 2.U
-                            kMoved             := kMoved + 1.U
-                            currentD           := (maxDepth-1).U
-                            found              = true
-                        }
+                // ä½¿ç”¨å¯„å­˜å™¨ä»£æ›¿varå˜é‡
+                val searchComplete = RegInit(false.B)
+                val nodeFound = RegInit(false.B)
+                
+                when(!searchComplete) {
+                    when(currentD > 0.U && hist(currentD) > 0.U) {
+                        // æ‰§è¡ŒèŠ‚ç‚¹è¿ç§»
+                        hist(currentD) := hist(currentD) - 1.U
+                        hist(maxDepth) := hist(maxDepth) + 1.U
+                        hist(currentD - 1.U) := hist(currentD - 1.U) + 2.U
+                        kMoved := kMoved + 1.U
+                        currentD := (maxDepth-1).U
+                        nodeFound := true.B
+                    }.elsewhen(currentD === 0.U) {
+                        searchComplete := true.B
+                    }.otherwise {
+                        currentD := currentD - 1.U
                     }
                 }
                 
-                // Èç¹ûÃ»ÓĞÕÒµ½¿ÉÇ¨ÒÆµÄ½Úµã£¬»òÕßÒÑ¾­¼ì²éÍêËùÓĞ²ã¼¶
-                when(!found || currentD === 0.U) {
-                    step := 3.U // Ã»ÓĞ¸ü¶à½Úµã¿ÉÇ¨ÒÆ£¬½øÈë²½Öè3.2
-                    currentD := 0.U // ´ÓÉî¶È0¿ªÊ¼´¦Àí¿Õ¶´
-                }.otherwise {
-                    currentD := currentD - 1.U // ¼ÌĞø¼ì²éÏÂÒ»¸öÉî¶È
+                when(searchComplete || nodeFound) {
+                    when(kMoved >= K) {
+                        step := 3.U
+                        currentD := 0.U
+                    }.otherwise {
+                        searchComplete := false.B
+                        nodeFound := false.B
+                        currentD := (maxDepth-1).U
+                    }
                 }
             }.otherwise {
-                // K¸ö½ÚµãÒÑÇ¨ÒÆ£¬½øÈë²½Öè3.2Ïû³ı¿Õ¶´
                 step := 3.U
-                currentD := 0.U // ´ÓÉî¶È0¿ªÊ¼´¦Àí¿Õ¶´
+                currentD := 0.U
             }
         }
-        
-        is(3.U) { // ²½Öè3.2£ºÓ¦ÓÃObservation 3Ïû³ıÊ£Óà¿Õ¶´
+
+        is(3.U) { // Step 3.2: Apply Observation 3 to eliminate remaining holes
             when(currentD < maxDepth.U) {
-                // ¼ÆËãµ±Ç°Éî¶ÈµÄ¿Õ¶´Êı
                 holes(currentD) := computeHoles(currentD)
                 
-                // ´¦Àí¿Õ¶´£º³¢ÊÔ´Ó¸üÉî²ãÇ¨ÒÆ½ÚµãÌî²¹¿Õ¶´
-                when(holes(currentD) > 0.U && currentD < (maxDepth-1).U) {
-                    // ²éÕÒ¸üÉî²ãµÄ½Úµã
-                    var found = false
-                    for(d <- (maxDepth-1) to (currentD.toInt+1) by -1) {
-                        if(!found) {
-                            when(hist(d) > 0.U) {
-                                // Ç¨ÒÆ½ÚµãÒÔÌî²¹¿Õ¶´
-                                hist(d)            := hist(d) - 1.U
-                                hist(currentD)     := hist(currentD) + 1.U
-                                hist(d - 1)        := hist(d - 1) + 2.U
-                                holes(currentD)    := holes(currentD) - 1.U
-                                found              = true
-                            }
-                        }
+                // ä½¿ç”¨çŠ¶æ€å¯„å­˜å™¨å¤„ç†æœç´¢ï¼Œé¿å…å¾ªç¯
+                val fillComplete = RegInit(false.B)
+                val searchDepth = RegInit((maxDepth-1).U)
+                
+                when(holes(currentD) > 0.U && currentD < (maxDepth-1).U && !fillComplete) {
+                    when(searchDepth > currentD && hist(searchDepth) > 0.U) {
+                        // è¿ç§»èŠ‚ç‚¹å¡«è¡¥ç©ºæ´
+                        hist(searchDepth) := hist(searchDepth) - 1.U
+                        hist(currentD) := hist(currentD) + 1.U
+                        hist(searchDepth - 1.U) := hist(searchDepth - 1.U) + 2.U
+                        holes(currentD) := holes(currentD) - 1.U
+                        fillComplete := true.B
+                    }.elsewhen(searchDepth <= currentD) {
+                        fillComplete := true.B
+                    }.otherwise {
+                        searchDepth := searchDepth - 1.U
                     }
+                }.otherwise {
+                    fillComplete := true.B
                 }
                 
-                currentD := currentD + 1.U
+                when(fillComplete) {
+                    currentD := currentD + 1.U
+                    fillComplete := false.B
+                    searchDepth := (maxDepth-1).U
+                }
             }.otherwise {
-                // ËùÓĞÉî¶È´¦ÀíÍê±Ï£¬Íê³Éµ÷Õû
                 step := 4.U
             }
         }
         
-        is(4.U) { // Íê³É×´Ì¬
+        is(4.U) { // Completion state
             when(!io.start) {
-                step := 0.U // µÈ´ıÏÂÒ»´ÎÆô¶¯
+                step := 0.U // Wait for next start signal
             }
         }
     }
-}    
+}

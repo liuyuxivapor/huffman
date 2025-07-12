@@ -1,4 +1,4 @@
-package huffman_encoder
+package huffman.encoder
 
 import chisel3._
 import chisel3.util._
@@ -43,6 +43,8 @@ class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
     
     // 过滤后的频率数据
     val filtered_freq = RegInit(VecInit(Seq.fill(depth)(0.U(wtWidth.W))))
+
+    val efficiency_threshold = (0.8 * (1 << 16)).toInt.U  // 80% 效率阈值
     
     // 连接逻辑
     switch(state) {
@@ -65,7 +67,7 @@ class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
         }
         
         is(sBuildTree) {
-            // 使用基础树构建器
+            val sorted_freq = symbol_sort.io.sorted_out.bits
             basic_tree_builder.io.sorted_in.valid := true.B
             basic_tree_builder.io.sorted_in.bits := filtered_freq
             basic_tree_builder.io.start := true.B
@@ -91,7 +93,7 @@ class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
             quality_analyzer.io.freq_in := filtered_freq
             quality_analyzer.io.valid := true.B
             
-            when(quality_analyzer.io.efficiency > threshold) {
+            when(quality_analyzer.io.efficiency > efficiency_threshold) {
                 state := sGenerateCodes
             }.otherwise {
                 // 质量不达标，重新调整参数

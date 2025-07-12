@@ -1,4 +1,4 @@
-package huffman_encoder
+package huffman.encoder
 
 import chisel3._
 import chisel3.util._
