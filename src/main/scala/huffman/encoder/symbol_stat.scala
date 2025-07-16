@@ -3,7 +3,6 @@ package huffman.encoder
 import chisel3._
 import chisel3.util._
 
-// state: 0-idle,1-count,2-output
 class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends Module {
     val io = IO(new Bundle {
         val data_in  = Flipped(Decoupled(UInt(sym_width.W)))
@@ -19,10 +18,10 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
     val state = RegInit(sIdle)
     val outIdx = RegInit(0.U(log2Ceil(depth).W))
 
-    io.data_in.ready := false.B
-    io.freq_out.valid := false.B
+    io.data_in.ready := (state === sCount)
+    io.freq_out.valid := (state === sOutput)
     io.freq_out.bits := freq
-    io.done := false.B
+    io.done := (state === sOutput && io.freq_out.fire)
     io.busy := (state =/= sIdle)
 
     switch(state) {
@@ -35,7 +34,6 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
             }
         }
         is(sCount) {
-            io.data_in.ready := true.B
             when(io.data_in.fire) {
                 val sym = io.data_in.bits
                 freq(sym) := freq(sym) + 1.U
@@ -46,14 +44,8 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
             }
         }
         is(sOutput) {
-            io.freq_out.valid := true.B
-            io.freq_out.bits := freq
             when(io.freq_out.fire) {
-                outIdx := outIdx + 1.U
-                when(outIdx === (depth-1).U) {
-                    state := sIdle
-                    io.done := true.B
-                }
+                state := sIdle
             }
         }
     }

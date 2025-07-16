@@ -5,12 +5,12 @@ import chiseltest.WriteVcdAnnotation
 import chiseltest.VerilatorBackendAnnotation
 import chisel3.stage.ChiselGeneratorAnnotation
 import circt.stage.{ChiselStage, FirtoolOption}
-import Fundamental_IC._
+import huffman.encoder._
 
 object main extends App {
     (new ChiselStage).execute(
       Array("--target", "systemverilog", "--target-dir", "verilog/dut"),
-      Seq(ChiselGeneratorAnnotation(() => new parallel_adder(4,32)),
+      Seq(ChiselGeneratorAnnotation(() => new EntropyAwareHuffmanSystem(256, 32, 8, 16)),
       FirtoolOption("--disable-all-randomization"),
       FirtoolOption("-strip-debug-info")
       )

@@ -1,2 +1,1 @@
-# Chisel-for-Fundamental-IC
-Fundamental IC described in Chisel
+# An Efficient Huffman-code Based Accelerator for LLM Inference
