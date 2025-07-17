@@ -9,7 +9,6 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
         val freq_out = Decoupled(Vec(depth, UInt(wtWidth.W)))
         val start    = Input(Bool())
         val done     = Output(Bool())
-        val busy     = Output(Bool())
         val flush    = Input(Bool())
     })
 
@@ -22,7 +21,6 @@ class SymbolStat(val sym_width: Int, val wtWidth: Int, val depth: Int) extends M
     io.freq_out.valid := (state === sOutput)
     io.freq_out.bits := freq
     io.done := (state === sOutput && io.freq_out.fire)
-    io.busy := (state =/= sIdle)
 
     switch(state) {
         is(sIdle) {

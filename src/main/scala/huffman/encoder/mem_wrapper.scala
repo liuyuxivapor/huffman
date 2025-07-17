@@ -22,7 +22,6 @@ class MemWrapper(val depth: Int, val maxCodeLen: Int, val addrWidth: Int) extend
         val code_table = Output(Vec(depth, UInt(maxCodeLen.W)))
         val length_table = Output(Vec(depth, UInt(log2Ceil(maxCodeLen+1).W)))
         val table_ready = Output(Bool())
-        val busy = Output(Bool())
         val flush = Input(Bool())
     })
 
@@ -54,8 +53,6 @@ class MemWrapper(val depth: Int, val maxCodeLen: Int, val addrWidth: Int) extend
     val read_counter = RegInit(0.U(log2Ceil(depth).W))
     val code_table_reg = Reg(Vec(depth, UInt(maxCodeLen.W)))
     val length_table_reg = Reg(Vec(depth, UInt(log2Ceil(maxCodeLen+1).W)))
-    
-    io.busy := (io.write_en || io.bulk_read_en)
 
     when(io.bulk_read_en && bulk_read_state === 0.U) {
         bulk_read_state := 1.U

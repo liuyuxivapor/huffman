@@ -54,80 +54,57 @@ class tree_adjust(val numLeaves: Int, val maxDepth: Int) extends Module {
         }
 
         is(sMigrate) {
-            when(migrated < K) {
-                // 标志是否本轮找到可迁移
-                val found = WireInit(false.B)
-                // 顺序遍历 d=1..L-1
-                for (d <- 1 until maxDepth) {
-                    when(!found && hist(d) > 0.U) {
-                        // 迁移一个节点到 L
-                        hist(d) := hist(d) - 1.U
-                        hist(maxDepth) := hist(maxDepth) + 1.U
-                        // 同时在 d-1 处产生两个“子空位”
-                        hist(d-1) := hist(d-1) + 2.U
-                        migrated := migrated + 1.U
-                        found := true.B
-                    }
-                }
-                // 迁移后检查空位
-                when(emptyL >= K) {
-                    // 第 L 级已有足够空位
-                    holesLeft := emptyL
-                    state := sFillHoles
-                } .elsewhen(!found) {
-                    // 如果找不到可迁移节点（所有 d 层都没节点），直接进入下一步
-                    holesLeft := emptyL
-                    state := sFillHoles
-                }
-            }.otherwise {
-                // 已经迁移 K 次
+            // 找出第一个 d in [1, maxDepth-1] 且 hist(d)>0 的层级
+            val validMask = VecInit((1 until maxDepth).map(d => hist(d) > 0.U))
+            val canMigrate = validMask.asUInt.orR
+            val validMaskOH = validMask.asUInt
+            val selOH = PriorityEncoderOH(validMaskOH)
+            val sel = OHToUInt(selOH) + 1.U
+
+            when(migrated < K && canMigrate) {
+                // 在 sel 处迁移
+                hist(sel)        := hist(sel) - 1.U
+                hist(maxDepth)   := hist(maxDepth) + 1.U
+                hist(sel - 1.U)  := hist(sel - 1.U) + 2.U
+                migrated         := migrated + 1.U
+            }
+
+            // 迁移结束或无可迁移节点时进入 FillHoles
+            when(migrated >= K || !canMigrate) {
                 holesLeft := emptyL
-                state := sFillHoles
+                state     := sFillHoles
             }
         }
 
         // Observation 3，填补 holesLeft 个空洞
         is(sFillHoles) {
-            when(holesLeft > 0.U) {
-                // 顺序从最深层向上找可迁移节点
-                val found2 = WireInit(false.B)
+            // 从最深层往上找节点来“填洞”
+            val validMask2 = VecInit(((maxDepth+1) to maxD).reverse.map(d => hist(d) > 0.U))
+            val canFill    = validMask2.asUInt.orR
+            val sel2       = PriorityEncoder(validMask2) // sel2=0->层=maxD, sel2=1->maxD-1, etc.
+            val level      = (maxD.U - sel2)
 
-                for (d <- (maxDepth+1 to maxD).reverse) {
-                    when(!found2 && hist(d) > 0.U) {
-                        // 将该节点迁移到 L，填洞
-                        hist(d) := hist(d) - 1.U
-                        hist(maxDepth) := hist(maxDepth) + 1.U
-                        hist(d-1) := hist(d-1) + 2.U
-                        holesLeft := holesLeft - 1.U
-                        found2 := true.B
-                    }
-                }
-
-                // 如果一轮下来未找到可迁移节点，也认为洞补完，直接进入 Assign
-                when(!found2) {
-                    state := sAssign
-                    assignPtr := 0.U
-                    for(d <- 0 to maxD) cnts(d) := hist(d)
-                }
-            } .otherwise {
-                // 洞已全部填完
-                state := sAssign
+            when(holesLeft > 0.U && canFill) {
+                hist(level)      := hist(level) - 1.U
+                hist(maxDepth)   := hist(maxDepth) + 1.U
+                hist(level - 1.U):= hist(level - 1.U) + 2.U
+                holesLeft        := holesLeft - 1.U
+            }.otherwise {
+                // 洞填完后，准备 Assign
                 assignPtr := 0.U
                 for(d <- 0 to maxD) cnts(d) := hist(d)
+                state := sAssign
             }
         }
 
         is(sAssign) {
             when(assignPtr < numLeaves.U) {
-                val sel = WireInit(0.U(depthWidth.W))
-                for(d <- 0 to maxD) {
-                    when(cnts(d) > 0.U && sel === 0.U) { 
-                        sel := d.U 
-                    }
-                }
+                val mask = VecInit(cnts.map(_ > 0.U))
+                val sel  = PriorityEncoder(mask)
+
                 outDepth(assignPtr) := sel
-                cnts(sel) := cnts(sel) - 1.U
-                assignPtr := assignPtr + 1.U
+                cnts(sel)           := cnts(sel) - 1.U
+                assignPtr           := assignPtr + 1.U
             } .otherwise {
                 state := sDone
             }

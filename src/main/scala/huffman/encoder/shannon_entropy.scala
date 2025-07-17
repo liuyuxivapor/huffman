@@ -22,7 +22,6 @@ class ShannonEntropy(val depth: Int, val wtWidth: Int) extends Module {
         val entropy_out = Output(UInt(32.W))
         val done = Output(Bool())  // Valid signal for entropy output
         
-        val busy = Output(Bool())  // Busy signal for the module
         val flush = Input(Bool())  // Flush signal for clearing the module state
     })
 
@@ -43,8 +42,6 @@ class ShannonEntropy(val depth: Int, val wtWidth: Int) extends Module {
     threshold_ctrl.io.entropy_in    := finalEntropy
     threshold_ctrl.io.entropy_valid := false.B
 
-    // Busy signal indicates whether the module is in processing state
-    io.busy := state =/= sIdle
     io.done := state === sDone
     io.entropy_out := finalEntropy
     io.compression_mode := threshold_ctrl.io.encoding_mode

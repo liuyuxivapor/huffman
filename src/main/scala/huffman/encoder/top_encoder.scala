@@ -5,140 +5,163 @@ import chisel3.util._
 
 class EntropyAwareHuffmanSystem(val symWidth: Int, val wtWidth: Int, val depth: Int, val maxCodeLen: Int) extends Module {
     val io = IO(new Bundle {
+        // 输入数据流
         val data_in = Flipped(Decoupled(UInt(symWidth.W)))
         
-        // Encoded output stream
+        // 编码输出流
         val encoded_out = Decoupled(new Bundle {
-            val code = UInt(maxCodeLen.W)
-            val length = UInt(log2Ceil(maxCodeLen+1).W)
-            val compression_mode = UInt(1.W)
+        val code = UInt(maxCodeLen.W)
+        val length = UInt(log2Ceil(maxCodeLen + 1).W)
+        val compression_mode = UInt(1.W)
         })
         
-        // Control and status
+        // 控制信号
         val start = Input(Bool())
-        val done  = Output(Bool())
+        val done = Output(Bool())
         val flush = Input(Bool())
     })
 
-    val stage_valid = RegInit(VecInit(Seq.fill(4)(false.B)))
-    val stage_ready = Wire(Vec(4, Bool()))
+    // 子模块实例化
+    val symbolStat = Module(new SymbolStat(symWidth, wtWidth, depth))
+    val symbolSort = Module(new SymbolSort(depth, wtWidth))
+    val entropyCalc = Module(new ShannonEntropy(depth, wtWidth))
+    val treeBuilder = Module(new EntropyAwareTreeBuilder(depth, wtWidth))
 
-    val symbol_stat = Module(new SymbolStat(symWidth, wtWidth, depth))
-    val symbol_sort = Module(new SymbolSort(depth, wtWidth))
-    val entropy_calc = Module(new ShannonEntropy(depth, wtWidth))
-    val tree_builder = Module(new EntropyAwareTreeBuilder(depth, wtWidth))
+    // 流水线阶段有效信号（控制每个阶段是否活跃） Ready for in, Valid for out
+    val pipeValid = RegInit(VecInit(Seq.fill(4)(false.B)))
+    val pipeReady = RegInit(VecInit(Seq.fill(4)(false.B)))
 
-    val freqs1 = Reg(Vec(depth, UInt(wtWidth.W)))
-    val freqs2 = Reg(Vec(depth, UInt(wtWidth.W)))
-    val mode3  = Reg(UInt(2.W))
-    val codes4 = Reg(Vec(depth, UInt(maxCodeLen.W)))
-    val lens4  = Reg(Vec(depth, UInt(log2Ceil(maxCodeLen+1).W)))
+    // 管道寄存器（用于阶段间数据传递）
+    val freqReg1 = Reg(Vec(depth, UInt(wtWidth.W)))
+    val freqReg2 = Reg(Vec(depth, UInt(wtWidth.W)))
+    val modeReg3 = Reg(UInt(2.W))
+    val codeReg4 = Reg(Vec(depth, UInt(maxCodeLen.W)))
+    val lenReg4 = Reg(Vec(depth, UInt(log2Ceil(maxCodeLen + 1).W)))
 
-    val busy = symbol_stat.io.busy || symbol_sort.io.busy || entropy_calc.io.busy || tree_builder.io.busy
-    stage_ready(0) := symbol_stat.io.done && !symbol_stat.io.busy
-    stage_ready(1) := symbol_sort.io.done && !symbol_sort.io.busy
-    stage_ready(2) := entropy_calc.io.done && !entropy_calc.io.busy
-    stage_ready(3) := tree_builder.io.done && !tree_builder.io.busy
+    // 各阶段就绪信号
+    pipeValid(0) := symbolStat.io.done
+    pipeValid(1) := symbolSort.io.done
+    pipeValid(2) := entropyCalc.io.done
+    pipeValid(3) := treeBuilder.io.done
 
-    val advance = stage_ready.asUInt.andR && !busy && !io.flush
+    // === 子模块接口连接 ===
 
-    // Initialize
-    symbol_stat.io.data_in.bits := io.data_in.bits
-    symbol_stat.io.data_in.valid := stage_valid(0) && io.data_in.valid
-    symbol_stat.io.start := stage_valid(0)
-    symbol_stat.io.flush := io.flush
+    // Stage 0: SymbolStat
+    symbolStat.io.data_in <> io.data_in
+    symbolStat.io.start := pipeReady(0)
+    symbolStat.io.flush := io.flush
 
-    symbol_sort.io.freq_in.valid := stage_valid(1)
-    symbol_sort.io.freq_in.bits := freqs1
-    symbol_sort.io.start := stage_valid(1)
-    symbol_sort.io.flush := io.flush
+    // Stage 1: SymbolSort
+    symbolSort.io.freq_in.bits := freqReg1
+    symbolSort.io.freq_in.valid := symbolStat.io.freq_out.valid
+    symbolStat.io.freq_out.ready := symbolSort.io.freq_in.ready
+    symbolSort.io.start := pipeReady(1)
+    symbolSort.io.flush := io.flush
 
-    entropy_calc.io.freq_in := freqs2
-    entropy_calc.io.start := stage_valid(2)
-    entropy_calc.io.flush := io.flush
+    // Stage 2: Entropy Calculation
+    entropyCalc.io.freq_in := freqReg2
+    entropyCalc.io.start := pipeReady(2)
+    entropyCalc.io.flush := io.flush
 
-    tree_builder.io.freq_in := freqs2
-    tree_builder.io.entropy_config.encoding_mode := Mux(stage_valid(3) && mode3 =/= 0.U, mode3, 0.U)
-    tree_builder.io.entropy_config.tree_depth_limit := Mux(stage_valid(3) && mode3 =/= 0.U, log2Ceil(depth).U, 0.U)
-    tree_builder.io.entropy_config.min_freq_threshold := Mux(stage_valid(3) && mode3 =/= 0.U, (0.5 * (1 << 16)).toInt.U, 0.U)
-    tree_builder.io.start := stage_valid(3) && mode3 =/= 0.U
-    tree_builder.io.flush := io.flush
+    // Stage 3: Tree Builder
+    treeBuilder.io.freq_in := freqReg2
+    treeBuilder.io.entropy_config.encoding_mode := Mux(pipeReady(3) && modeReg3 =/= 0.U, modeReg3, 0.U)
+    treeBuilder.io.entropy_config.tree_depth_limit := Mux(pipeReady(3) && modeReg3 =/= 0.U, log2Ceil(depth).U, 0.U)
+    treeBuilder.io.entropy_config.min_freq_threshold := Mux(pipeReady(3) && modeReg3 =/= 0.U, (0.5 * (1 << 16)).toInt.U, 0.U)
+    treeBuilder.io.start := pipeReady(3) && modeReg3 =/= 0.U
+    treeBuilder.io.flush := io.flush
 
-    // Initialize stage control
-    stage_valid(0) := io.start && io.data_in.valid
+    // === 流水线控制逻辑 ===
 
-    // Stage 1: SymbolStat
-    when(stage_valid(0)) {
-        when(symbol_stat.io.done && advance) {
-            freqs1 := symbol_stat.io.freq_out.bits
-            stage_valid(1) := true.B
-            stage_valid(0) := false.B
+    // Stage 0 使能条件
+    pipeReady(0) := io.start && io.data_in.valid
+
+    // Stage 1 转移
+    freqReg1 := symbolStat.io.freq_out.bits
+    when(pipeReady(0)) {
+        when(pipeReady(0)) {
+            pipeValid(1) := true.B
+            pipeValid(0) := false.B
         }
     }
 
-    // Stage 2: SymbolSort  
-    when(stage_valid(1)) {
-        when(symbol_sort.io.done && advance) {
-            freqs2 := symbol_sort.io.sorted_out.bits
-            stage_valid(2) := true.B
-            stage_valid(1) := false.B
+    // Stage 2 转移
+    freqReg2 := symbolSort.io.sorted_out
+    when(pipeReady(1)) {
+        when(pipeReady(1)) {
+            pipeValid(2) := true.B
+            pipeValid(1) := false.B
         }
     }
 
-    // Stage 3: Entropy Calculation
-    when(stage_valid(2)) {
-        when(entropy_calc.io.done && advance) {
-            mode3 := entropy_calc.io.compression_mode
-            stage_valid(3) := true.B
-            stage_valid(2) := false.B
+    // Stage 3 转移
+    modeReg3 := entropyCalc.io.compression_mode
+    when(pipeReady(2)) {
+        when(pipeReady(2)) {
+            pipeValid(3) := true.B
+            pipeValid(2) := false.B
         }
     }
 
-    // Stage 4: Tree Building
-    when(stage_valid(3)) {
-        when(mode3 =/= 0.U) {
-            when(tree_builder.io.done && advance) {
-                codes4 := tree_builder.io.code_out
-                lens4 := tree_builder.io.length_out
-                stage_valid(3) := false.B
+    // Stage 4 转移
+    when(pipeValid(3)) {
+        when(modeReg3 =/= 0.U) {
+            when(pipeReady(3)) {
+                codeReg4 := treeBuilder.io.code_out
+                lenReg4 := treeBuilder.io.length_out
+                pipeValid(3) := false.B
             }
-        }.otherwise {
-            // Bypass mode
-            for(i <- 0 until depth) {
-                codes4(i) := i.U
-                lens4(i) := symWidth.U
+        } .otherwise {
+        // Bypass 
+            for (i <- 0 until depth) {
+                codeReg4(i) := i.U
+                lenReg4(i) := symWidth.U
             }
-            stage_valid(3) := false.B
+            pipeValid(3) := false.B
         }
     }
 
+    // === 输出逻辑 ===
 
-    // Output
-    io.data_in.ready := stage_valid(0) && io.encoded_out.ready
+    val encodedValid = RegInit(false.B)
+    val encodedCode = Reg(UInt(maxCodeLen.W))
+    val encodedLen = Reg(UInt(log2Ceil(maxCodeLen + 1).W))
+    val encodedMode = Reg(UInt(1.W))
 
     when(io.data_in.valid && !io.flush) {
-        io.encoded_out.valid := true.B
-        when(mode3 === 0.U) {
-            io.encoded_out.bits.code := io.data_in.bits
-            io.encoded_out.bits.length := symWidth.U
-            io.encoded_out.bits.compression_mode := 0.U
-        }.otherwise {
+        encodedValid := true.B
+        when(modeReg3 === 0.U) {
+            encodedCode := io.data_in.bits
+            encodedLen := symWidth.U
+            encodedMode := 0.U
+        } .otherwise {
             val addr = io.data_in.bits
-            io.encoded_out.bits.code := codes4(addr)
-            io.encoded_out.bits.length := lens4(addr)
-            io.encoded_out.bits.compression_mode := mode3
+            encodedCode := codeReg4(addr)
+            encodedLen := lenReg4(addr)
+            encodedMode := modeReg3(0)
         }
-    }.otherwise {
-        io.encoded_out.valid := false.B
-        io.encoded_out.bits.code := 0.U
-        io.encoded_out.bits.length := 0.U
-        io.encoded_out.bits.compression_mode := 0.U
+    } .otherwise {
+        encodedValid := false.B
     }
 
-    // Done when pipeline empties
-    io.done := !stage_valid.asUInt.orR
+    // 输出接口连接
+    io.encoded_out.valid := encodedValid
+    io.encoded_out.bits.code := encodedCode
+    io.encoded_out.bits.length := encodedLen
+    io.encoded_out.bits.compression_mode := encodedMode
 
+    // 反压处理
+    io.data_in.ready := pipeValid(0) && io.encoded_out.ready
+    encodedValid := encodedValid && !io.encoded_out.ready
+
+    // 完成信号
+    io.done := !pipeValid.asUInt.orR
+
+    // 清空信号
     when(io.flush) {
-        for(i <- 0 until 4) stage_valid(i) := false.B
+        for (i <- 0 until 4) {
+        pipeValid(i) := false.B
+        }
+        encodedValid := false.B
     }
 }
