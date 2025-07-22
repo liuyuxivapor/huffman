@@ -3,5 +3,6 @@ target/
 .bsp/
 .metals/
 .vscode/
+test_run_dir/
 
 .scalafmt.conf

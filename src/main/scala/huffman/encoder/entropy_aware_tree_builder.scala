@@ -137,12 +137,21 @@ class EntropyAwareTreeBuilder(val depth: Int, val wtWidth: Int) extends Module {
             }
 
             // 2. 最终生成 codes 和 lengths
+            // for (i <- 0 until depth) {
+            //     val lvl = depthsInReg(i)             // 该符号的码长
+            //     lengths(i) := lvl
+            //     // 偏移量就是前面级别的总和
+            //     val offset = prefixSum(lvl)         // 动态索引 prefixSum
+            //     codes(i) := codeStartReg(lvl) + offset
+            // }
+            val idxWidth = log2Ceil(17 + 1)
             for (i <- 0 until depth) {
-                val lvl = depthsInReg(i)             // 该符号的码长
+                val lvl    = depthsInReg(i)        // 该符号的码长
                 lengths(i) := lvl
-                // 偏移量就是前面级别的总和
-                val offset = prefixSum(lvl)         // 动态索引 prefixSum
-                codes(i) := codeStartReg(lvl) + offset
+                // 强制截断至 idxWidth 位，匹配 Vec 大小
+                val lvlIdx = lvl.pad(idxWidth)
+                val offset = prefixSum(lvlIdx)
+                codes(i)  := codeStartReg(lvlIdx) + offset
             }
             state := sDone
         }

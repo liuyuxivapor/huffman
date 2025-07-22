@@ -3,18 +3,23 @@ package huffman.encoder
 import chisel3._
 import chisel3.util._
 
-class EntropyAwareHuffmanSystem(val symWidth: Int, val wtWidth: Int, val depth: Int, val maxCodeLen: Int) extends Module {
+class EntropyAwareHuffmanSystem(
+    val symWidth: Int,
+    val wtWidth: Int,
+    val depth: Int,
+    val maxCodeLen: Int
+) extends Module {
     val io = IO(new Bundle {
         // 输入数据流
         val data_in = Flipped(Decoupled(UInt(symWidth.W)))
-        
+
         // 编码输出流
         val encoded_out = Decoupled(new Bundle {
         val code = UInt(maxCodeLen.W)
         val length = UInt(log2Ceil(maxCodeLen + 1).W)
         val compression_mode = UInt(1.W)
         })
-        
+
         // 控制信号
         val start = Input(Bool())
         val done = Output(Bool())
@@ -65,9 +70,21 @@ class EntropyAwareHuffmanSystem(val symWidth: Int, val wtWidth: Int, val depth: 
 
     // Stage 3: Tree Builder
     treeBuilder.io.freq_in := freqReg2
-    treeBuilder.io.entropy_config.encoding_mode := Mux(pipeReady(3) && modeReg3 =/= 0.U, modeReg3, 0.U)
-    treeBuilder.io.entropy_config.tree_depth_limit := Mux(pipeReady(3) && modeReg3 =/= 0.U, log2Ceil(depth).U, 0.U)
-    treeBuilder.io.entropy_config.min_freq_threshold := Mux(pipeReady(3) && modeReg3 =/= 0.U, (0.5 * (1 << 16)).toInt.U, 0.U)
+    treeBuilder.io.entropy_config.encoding_mode := Mux(
+        pipeReady(3) && modeReg3 =/= 0.U,
+        modeReg3,
+        0.U
+    )
+    treeBuilder.io.entropy_config.tree_depth_limit := Mux(
+        pipeReady(3) && modeReg3 =/= 0.U,
+        log2Ceil(depth).U,
+        0.U
+    )
+    treeBuilder.io.entropy_config.min_freq_threshold := Mux(
+        pipeReady(3) && modeReg3 =/= 0.U,
+        (0.5 * (1 << 16)).toInt.U,
+        0.U
+    )
     treeBuilder.io.start := pipeReady(3) && modeReg3 =/= 0.U
     treeBuilder.io.flush := io.flush
 
@@ -80,8 +97,8 @@ class EntropyAwareHuffmanSystem(val symWidth: Int, val wtWidth: Int, val depth: 
     freqReg1 := symbolStat.io.freq_out.bits
     when(pipeReady(0)) {
         when(pipeReady(0)) {
-            pipeValid(1) := true.B
-            pipeValid(0) := false.B
+        pipeValid(1) := true.B
+        pipeValid(0) := false.B
         }
     }
 
@@ -89,8 +106,8 @@ class EntropyAwareHuffmanSystem(val symWidth: Int, val wtWidth: Int, val depth: 
     freqReg2 := symbolSort.io.sorted_out
     when(pipeReady(1)) {
         when(pipeReady(1)) {
-            pipeValid(2) := true.B
-            pipeValid(1) := false.B
+        pipeValid(2) := true.B
+        pipeValid(1) := false.B
         }
     }
 
@@ -98,26 +115,26 @@ class EntropyAwareHuffmanSystem(val symWidth: Int, val wtWidth: Int, val depth: 
     modeReg3 := entropyCalc.io.compression_mode
     when(pipeReady(2)) {
         when(pipeReady(2)) {
-            pipeValid(3) := true.B
-            pipeValid(2) := false.B
+        pipeValid(3) := true.B
+        pipeValid(2) := false.B
         }
     }
 
     // Stage 4 转移
     when(pipeValid(3)) {
         when(modeReg3 =/= 0.U) {
-            when(pipeReady(3)) {
-                codeReg4 := treeBuilder.io.code_out
-                lenReg4 := treeBuilder.io.length_out
-                pipeValid(3) := false.B
-            }
-        } .otherwise {
-        // Bypass 
-            for (i <- 0 until depth) {
-                codeReg4(i) := i.U
-                lenReg4(i) := symWidth.U
-            }
+        when(pipeReady(3)) {
+            codeReg4 := treeBuilder.io.code_out
+            lenReg4 := treeBuilder.io.length_out
             pipeValid(3) := false.B
+        }
+        }.otherwise {
+        // Bypass
+        for (i <- 0 until depth) {
+            codeReg4(i) := i.U
+            lenReg4(i) := symWidth.U
+        }
+        pipeValid(3) := false.B
         }
     }
 
@@ -131,16 +148,16 @@ class EntropyAwareHuffmanSystem(val symWidth: Int, val wtWidth: Int, val depth: 
     when(io.data_in.valid && !io.flush) {
         encodedValid := true.B
         when(modeReg3 === 0.U) {
-            encodedCode := io.data_in.bits
-            encodedLen := symWidth.U
-            encodedMode := 0.U
-        } .otherwise {
-            val addr = io.data_in.bits
-            encodedCode := codeReg4(addr)
-            encodedLen := lenReg4(addr)
-            encodedMode := modeReg3(0)
+        encodedCode := io.data_in.bits
+        encodedLen := symWidth.U
+        encodedMode := 0.U
+        }.otherwise {
+        val addr = io.data_in.bits
+        encodedCode := codeReg4(addr)
+        encodedLen := lenReg4(addr)
+        encodedMode := modeReg3(0)
         }
-    } .otherwise {
+    }.otherwise {
         encodedValid := false.B
     }
 

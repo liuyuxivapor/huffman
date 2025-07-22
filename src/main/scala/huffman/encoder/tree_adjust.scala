@@ -19,7 +19,10 @@ class tree_adjust(val numLeaves: Int, val maxDepth: Int) extends Module {
     val K         = Reg(UInt(depthWidth.W))
     val holesLeft = Reg(UInt(depthWidth.W))
     val outDepth  = Reg(Vec(numLeaves, UInt(depthWidth.W)))
-    val assignPtr = RegInit(0.U(depthWidth.W))
+    // val assignPtr = RegInit(0.U(depthWidth.W))
+    // assignPtr needs log2Ceil(numLeaves) bits
+    val ptrWidth   = log2Ceil(numLeaves)
+    val assignPtr  = RegInit(0.U(ptrWidth.W))
 
     val sIdle :: sBuildHist :: sMigrate :: sFillHoles :: sAssign :: sDone :: Nil = Enum(6)
     val state     = RegInit(sIdle)
@@ -58,8 +61,10 @@ class tree_adjust(val numLeaves: Int, val maxDepth: Int) extends Module {
             val validMask = VecInit((1 until maxDepth).map(d => hist(d) > 0.U))
             val canMigrate = validMask.asUInt.orR
             val validMaskOH = validMask.asUInt
-            val selOH = PriorityEncoderOH(validMaskOH)
-            val sel = OHToUInt(selOH) + 1.U
+            val selOH = PriorityEncoderOH(validMaskOH.asUInt)
+            // val sel = OHToUInt(selOH) + 1.U
+            // Force sel to have enough bits to index hist(0..maxD)
+            val sel     = (OHToUInt(selOH) + 1.U).pad(log2Ceil(maxD+1))
 
             when(migrated < K && canMigrate) {
                 // 在 sel 处迁移
@@ -82,7 +87,10 @@ class tree_adjust(val numLeaves: Int, val maxDepth: Int) extends Module {
             val validMask2 = VecInit(((maxDepth+1) to maxD).reverse.map(d => hist(d) > 0.U))
             val canFill    = validMask2.asUInt.orR
             val sel2       = PriorityEncoder(validMask2) // sel2=0->层=maxD, sel2=1->maxD-1, etc.
-            val level      = (maxD.U - sel2)
+            // val level      = (maxD.U - sel2)
+            // sel2idx is an index into a Vec of length (maxD-maxDepth)
+            // pad it up to log2Ceil(maxD+1) bits before subtraction
+            val level      = maxD.U - sel2.pad(log2Ceil(maxD+1))
 
             when(holesLeft > 0.U && canFill) {
                 hist(level)      := hist(level) - 1.U
